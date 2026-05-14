@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package>
+  <metadata>
+    <id>AES256</id>
+    <version>1.0.0</version>
+    <authors>l.vitale</authors>
+    <description>Leonardo Vitale AES-256 encryption/decryption C++ DLL for CW</description>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+  </metadata>
+  <files>
+    <file src="x64\Release\AES256.dll"
+          target="native\AES256.dll" />
+    <file src="AES256\appSettings.json"
+          target="content\appSettings.json" />
+    <file src="build\AES256.props"
+          target="build\AES256.props" />
+  </files>
+</package>

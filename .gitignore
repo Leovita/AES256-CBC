@@ -1,0 +1,47 @@
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.aps
+*.ncb
+*.opendb
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+
+# Build output
+x64/
+x86/
+Debug/
+Release/
+build/
+ipch/
+
+# Compiled artifacts
+*.obj
+*.pch
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.dll
+*.exe
+*.tlog
+*.recipe
+*.idb
+*.iobj
+*.ipdb
+*.lastbuildstate
+
+# NuGet packages
+nupkg/
+*.nupkg
+packages/
+
+# Keys / secrets
+AES256/keys/
+*.key
+*.pem
+*.p12
+*.pfx
