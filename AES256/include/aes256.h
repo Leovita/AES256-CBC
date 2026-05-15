@@ -25,6 +25,14 @@ public:
     // hex ciphertext string -> plaintext string
     std::string decrypt(const std::string& hexCiphertext);
 
+    // genera una nuova chiave (versione successiva), segna la precedente come retired
+    // restituisce il numero della nuova versione attiva
+    int rotateKey();
+
+    // importa una chiave esterna (hex, 64 caratteri = 32 byte) e la salva come versione attiva
+    // usare per trasferire la chiave su un altro PC: getKey() sull'origine, importKey() sulla destinazione
+    void importKey(const std::string& hexKey);
+
 private:
     SecureKeyStorage storage_;
 
@@ -36,7 +44,3 @@ private:
     static std::vector<uint8_t> fromHex(const std::string& hex);
 };
 
-// --- template headers needed by secureStorage / cipher internals ---
-#include "aes_cipher.h"
-#include "aes_key_schedule.h"
-#include "aes_padding.h"

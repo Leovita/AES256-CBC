@@ -21,21 +21,6 @@
     <ClCompile Include="src\aes256.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
-    <ClCompile Include="src\galois.cpp">
-      <Filter>File di origine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\aes_state.cpp">
-      <Filter>File di origine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\aes_key_schedule.cpp">
-      <Filter>File di origine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\aes_cipher.cpp">
-      <Filter>File di origine</Filter>
-    </ClCompile>
-    <ClCompile Include="src\aes_padding.cpp">
-      <Filter>File di origine</Filter>
-    </ClCompile>
     <ClCompile Include="src\secureStorage.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
@@ -48,27 +33,12 @@
     <ClCompile Include="src\aes256_dll.cpp">
       <Filter>File di origine</Filter>
     </ClCompile>
+    <ClCompile Include="tests\kat_gcm.cpp">
+      <Filter>File di origine</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="include\aes256.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="include\aes_tables.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="include\galois.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="include\aes_state.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="include\aes_key_schedule.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="include\aes_cipher.h">
-      <Filter>File di intestazione</Filter>
-    </ClInclude>
-    <ClInclude Include="include\aes_padding.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
     <ClInclude Include="include\secureStorage.h">
@@ -80,5 +50,13 @@
     <ClInclude Include="include\aes256_dll.h">
       <Filter>File di intestazione</Filter>
     </ClInclude>
+    <ClInclude Include="tests\kat_gcm.h">
+      <Filter>File di intestazione</Filter>
+    </ClInclude>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="AES256.def">
+      <Filter>File di origine</Filter>
+    </None>
   </ItemGroup>
 </Project>

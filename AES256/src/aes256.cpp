@@ -1,14 +1,17 @@
 #include "aes256.h"
-#include "aes_cipher.h"
-#include "aes_key_schedule.h"
-#include "aes_padding.h"
 
 #include <windows.h>
+#include <bcrypt.h>
 #include <stdexcept>
-#include <random>
-#include <algorithm>
 #include <sstream>
 #include <iomanip>
+
+#pragma comment(lib, "bcrypt.lib")
+
+// 0xC000A002 = STATUS_AUTH_TAG_MISMATCH (evita conflitti con ntstatus.h)
+#ifndef STATUS_AUTH_TAG_MISMATCH
+#define STATUS_AUTH_TAG_MISMATCH ((NTSTATUS)0xC000A002L)
+#endif
 
 static std::array<uint8_t, 32> toKeyArray(const std::vector<uint8_t>& key) {
     std::array<uint8_t, 32> arr{};
@@ -17,12 +20,33 @@ static std::array<uint8_t, 32> toKeyArray(const std::vector<uint8_t>& key) {
     return arr;
 }
 
-static std::array<uint8_t, 16> loadBlock(const uint8_t* src, size_t available, uint8_t padVal) {
-    std::array<uint8_t, 16> block;
-    block.fill(padVal);
-    size_t n = available < 16 ? available : 16;
-    std::copy(src, src + n, block.begin());
-    return block;
+// C2: unico punto di generazione byte casuali crittografici
+static void cryptoRandBytes(uint8_t* buf, ULONG len) {
+    NTSTATUS st = BCryptGenRandom(nullptr, buf, len, BCRYPT_USE_SYSTEM_PREFERRED_RNG);
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptGenRandom fallito");
+}
+
+// RAII per handle CNG — evita leak in caso di eccezione
+struct BcryptAlgHandle {
+    BCRYPT_ALG_HANDLE h = nullptr;
+    ~BcryptAlgHandle() { if (h) BCryptCloseAlgorithmProvider(h, 0); }
+};
+struct BcryptKeyHandle {
+    BCRYPT_KEY_HANDLE h = nullptr;
+    ~BcryptKeyHandle() { if (h) BCryptDestroyKey(h); }
+};
+
+// C3: apre provider AES-256-GCM (AEAD) — sostituisce CBC puro
+static void openGcmAlg(BcryptAlgHandle& alg) {
+    NTSTATUS st = BCryptOpenAlgorithmProvider(&alg.h, BCRYPT_AES_ALGORITHM, nullptr, 0);
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptOpenAlgorithmProvider fallito");
+    st = BCryptSetProperty(alg.h, BCRYPT_CHAINING_MODE,
+        reinterpret_cast<PUCHAR>(const_cast<wchar_t*>(BCRYPT_CHAIN_MODE_GCM)),
+        sizeof(BCRYPT_CHAIN_MODE_GCM), 0);
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptSetProperty (GCM) fallito");
 }
 
 AES256::AES256(AppSettings settings)
@@ -32,8 +56,7 @@ AES256::AES256(AppSettings settings)
 
 void AES256::keyGen() {
     std::vector<uint8_t> key(32);
-    std::random_device rnd;
-    std::generate(key.begin(), key.end(), [&] { return static_cast<uint8_t>(rnd()); });
+    cryptoRandBytes(key.data(), 32);
 
     if (!storage_.protectKey(key)) {
         SecureZeroMemory(key.data(), key.size());
@@ -49,72 +72,123 @@ std::string AES256::getKey() {
     return hex;
 }
 
+// Formato output: [version 2B LE][nonce 12B][tag GCM 16B][ciphertext nB]
 std::vector<uint8_t> AES256::encryptRaw(const uint8_t* data, size_t sz) {
     if (!storage_.hasStoredKey())
-        throw std::runtime_error("AES256: nessuna chiave salvata. Chiamare keyGen() prima.");
+        throw std::runtime_error("AES256: nessuna chiave salvata.");
 
     auto key = storage_.unprotectKey();
-    auto expKey = aes::expandKey(toKeyArray(key));
+    auto keyArr = toKeyArray(key);
     SecureZeroMemory(key.data(), key.size());
 
-	// genera iv random, non è necessario proteggerlo, ma deve essere unico per ogni cifratura
-    std::array<uint8_t, 16> iv;
-    std::random_device rd;
-    std::uniform_int_distribution<unsigned int> dist(0, 255);
-    for (auto& b : iv) b = static_cast<uint8_t>(dist(rd));
+    BcryptAlgHandle alg;
+    openGcmAlg(alg);
 
-    size_t padVal    = 16 - (sz % 16);
-    size_t numBlocks = (sz + padVal) / 16;
+    BcryptKeyHandle hKey;
+    NTSTATUS st = BCryptGenerateSymmetricKey(alg.h, &hKey.h, nullptr, 0, keyArr.data(), 32, 0);
+    SecureZeroMemory(keyArr.data(), 32);
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptGenerateSymmetricKey fallito");
 
-    // out: [IV 16B][ciphertext blocks]
-    std::vector<uint8_t> out(16 + numBlocks * 16);
-    std::copy(iv.begin(), iv.end(), out.begin());
+    std::array<uint8_t, 12> nonce{};
+    cryptoRandBytes(nonce.data(), 12);
 
-    std::array<uint8_t, 16> prev = iv;
-    for (size_t i = 0; i < numBlocks; i++) {
-        size_t offset    = i * 16;
-        size_t available = (offset < sz) ? sz - offset : 0;
-        auto block = loadBlock(data + offset, available, static_cast<uint8_t>(padVal));
-        for (int j = 0; j < 16; j++) block[j] ^= prev[j];  // CBC XOR
-        aes::encipher(block, expKey);
-        std::copy(block.begin(), block.end(), out.begin() + 16 + offset);
-        prev = block;
-    }
+    std::array<uint8_t, 16> tag{};
+
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
+    BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
+    authInfo.pbNonce = nonce.data();
+    authInfo.cbNonce = 12;
+    authInfo.pbTag   = tag.data();
+    authInfo.cbTag   = 16;
+
+    ULONG cbResult = 0;
+    std::vector<uint8_t> ciphertext(sz);
+    st = BCryptEncrypt(hKey.h,
+        const_cast<PUCHAR>(data), static_cast<ULONG>(sz),
+        &authInfo, nullptr, 0,
+        ciphertext.data(), static_cast<ULONG>(sz),
+        &cbResult, 0);
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptEncrypt fallito");
+
+    uint16_t ver = static_cast<uint16_t>(storage_.getActiveVersion());
+    std::vector<uint8_t> out;
+    out.reserve(2 + 12 + 16 + cbResult);
+    out.push_back(static_cast<uint8_t>(ver & 0xFF));          // version LSB
+    out.push_back(static_cast<uint8_t>((ver >> 8) & 0xFF));   // version MSB
+    out.insert(out.end(), nonce.begin(), nonce.end());
+    out.insert(out.end(), tag.begin(), tag.end());
+    out.insert(out.end(), ciphertext.begin(), ciphertext.begin() + cbResult);
     return out;
 }
 
 std::vector<uint8_t> AES256::decryptRaw(const std::vector<uint8_t>& in) {
-    // Formato atteso: [IV 16B][almeno un blocco dati 16B]
-    if (in.size() < 32 || in.size() % 16 != 0)
-        throw std::length_error("AES256: dimensione input non valida (minimo 32 byte, multiplo di 16)");
+    // minimo: 2 (version) + 12 (nonce) + 16 (tag) = 30
+    if (in.size() < 30)
+        throw std::length_error("AES256: input troppo corto (minimo 30 byte)");
 
-    auto key = storage_.unprotectKey();
-    auto expKey = aes::expandKey(toKeyArray(key));
+    uint16_t version = static_cast<uint16_t>(in[0]) | (static_cast<uint16_t>(in[1]) << 8);
+
+    auto key = storage_.unprotectKey(static_cast<int>(version));
+    auto keyArr = toKeyArray(key);
+	// flush memory heap prima possibile, la chiave è ora in keyArr
     SecureZeroMemory(key.data(), key.size());
 
-    // Estrai IV (primi 16 byte)
-    std::array<uint8_t, 16> prev;
-    std::copy(in.begin(), in.begin() + 16, prev.begin());
+    BcryptAlgHandle alg;
+    openGcmAlg(alg);
 
-    size_t numBlocks = (in.size() - 16) / 16;
-    std::vector<uint8_t> out(numBlocks * 16);
-    for (size_t i = 0; i < numBlocks; i++) {
-        size_t offset = 16 + i * 16;
-        std::array<uint8_t, 16> block;
-        std::copy(in.begin() + offset, in.begin() + offset + 16, block.begin());
-        std::array<uint8_t, 16> enc = block;  // salva cipherblock per prossimo XOR
-        aes::decipher(block, expKey);
-        for (int j = 0; j < 16; j++) block[j] ^= prev[j];  // CBC XOR
-        std::copy(block.begin(), block.end(), out.begin() + i * 16);
-        prev = enc;
-    }
+    BcryptKeyHandle hKey;
+    NTSTATUS st = BCryptGenerateSymmetricKey(alg.h, &hKey.h, nullptr, 0, keyArr.data(), 32, 0);
+    SecureZeroMemory(keyArr.data(), 32);
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptGenerateSymmetricKey fallito");
 
-    uint8_t padLen = out.back();
-    if (padLen == 0 || padLen > 16)
-        throw std::runtime_error("AES256: padding non valido nel testo cifrato");
-    out.resize(out.size() - padLen);
+    // nonce: offset 2, tag: offset 14, ciphertext: offset 30
+    std::array<uint8_t, 16> tag{};
+    std::copy(in.begin() + 14, in.begin() + 30, tag.begin());
+    ULONG ctLen = static_cast<ULONG>(in.size() - 30);
 
+    BCRYPT_AUTHENTICATED_CIPHER_MODE_INFO authInfo;
+    BCRYPT_INIT_AUTH_MODE_INFO(authInfo);
+    authInfo.pbNonce = const_cast<PUCHAR>(in.data() + 2);
+    authInfo.cbNonce = 12;
+    authInfo.pbTag   = tag.data();
+    authInfo.cbTag   = 16;
+
+    ULONG cbResult = 0;
+    std::vector<uint8_t> out(ctLen);
+    st = BCryptDecrypt(hKey.h,
+        const_cast<PUCHAR>(in.data() + 30), ctLen,
+        &authInfo, nullptr, 0,
+        out.data(), ctLen,
+        &cbResult, 0);
+
+    if (st == STATUS_AUTH_TAG_MISMATCH)
+        throw std::runtime_error("AES256: autenticazione fallita — ciphertext corrotto o manomesso");
+    if (!BCRYPT_SUCCESS(st))
+        throw std::runtime_error("AES256: BCryptDecrypt fallito");
+
+    out.resize(cbResult);
     return out;
+}
+
+int AES256::rotateKey() {
+    return storage_.rotateKey();
+}
+
+void AES256::importKey(const std::string& hexKey) {
+    if (hexKey.size() != 64)
+        throw std::invalid_argument("AES256: la chiave deve essere 64 caratteri hex (32 byte / 256 bit)");
+
+    auto key = fromHex(hexKey);
+
+    if (!storage_.protectKey(key)) {
+        // svuota registro in heap
+        SecureZeroMemory(key.data(), key.size());
+        throw std::runtime_error("AES256: impossibile proteggere la chiave importata");
+    }
+    SecureZeroMemory(key.data(), key.size());
 }
 
 std::string AES256::encrypt(const std::string& plaintext) {
@@ -129,7 +203,6 @@ std::string AES256::decrypt(const std::string& hexCiphertext) {
     return std::string(plainBytes.begin(), plainBytes.end());
 }
 
-// hex -> string, string -> hex helpers impl.
 std::string AES256::toHex(const std::vector<uint8_t>& v) {
     std::ostringstream oss;
     for (uint8_t b : v)

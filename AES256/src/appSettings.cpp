@@ -35,8 +35,8 @@ AppSettings AppSettings::load(const std::string& jsonPath) {
     AppSettings settings;
 
     std::filesystem::path resolved = resolveSettingsPath(jsonPath);
-    std::cerr << "[AppSettings] cercando: " << resolved << " -> "
-        << (std::filesystem::exists(resolved) ? "trovato" : "NON trovato") << "\n";
+    //std::cerr << "[AppSettings] cercando: " << resolved << " -> "
+    //    << (std::filesystem::exists(resolved) ? "trovato" : "NON trovato") << "\n";
 
     std::ifstream file(resolved);
     if (!file)
@@ -55,11 +55,11 @@ AppSettings AppSettings::load(const std::string& jsonPath) {
     if (doc.HasMember("dpapiScope") && doc["dpapiScope"].IsString()) {
         std::string scope = doc["dpapiScope"].GetString();
         if (scope == "LocalMachine") {
-            std::cerr << "[AppSettings] DPAPI scope configurato su LocalMachine (richiede admin)\n";
+            //std::cerr << "[AppSettings] DPAPI scope configurato su LocalMachine (richiede admin)\n";
             settings.dpapiScope = SecureKeyStorage::LocalMachine;
         }
         else {
-            std::cerr << "[AppSettings] DPAPI scope configurato su CurrentUser (default)\n";
+            //std::cerr << "[AppSettings] DPAPI scope configurato su CurrentUser (default)\n";
             settings.dpapiScope = SecureKeyStorage::CurrentUser;
         }
     }

@@ -3,6 +3,9 @@ EXPORTS
     AES256_Create
     AES256_Destroy
     AES256_KeyGen
+    AES256_GetKey
+    AES256_ImportKey
+    AES256_RotateKey
     AES256_Encrypt
     AES256_Decrypt
     AES256_Free
